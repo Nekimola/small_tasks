@@ -1,7 +1,7 @@
 "use strict";
 
 const server = require('http').createServer();
-const    os = require('os').networkInterfaces();
+const os = require('os').networkInterfaces();
 const WebSocketServer = require('ws').Server;
 const wss = new WebSocketServer({ server: server });
 
@@ -17,23 +17,29 @@ const getAddress = () => {
 
 const ownAddress = getAddress();
 const remoteAddress = process.argv[2];
+const WebSocket = require('ws');
 
-let clients = remoteAddress ? [remoteAddress] : [];
-const sendMessage = (origin, message) => {
-    const WebSocket = require('ws');
-    const wsc = new WebSocket(`ws:${origin}`);
+let clients = [];
+let port = '';
+
+const hasClient = address => clients.some(target => target.address === address);
+
+const sendMessage = (address, message) => {
+    const wsc = new WebSocket(`ws:${address}`);
 
     wsc.on('open', () => {
-        wsc.send(JSON.stringify(message));
+        try {
+            wsc.send(JSON.stringify(message));
+            clients.push({ address, wsc });
+        } catch (e) {
+            console.log(`Get disconnected from ${address}`);
+        }
     });
 
     wsc.on('error', (e) => {
         console.log('Some error occurred ' + e);
     });
 };
-
-let port = '';
-
 
 if (remoteAddress) {
     setTimeout(() => {
@@ -45,39 +51,61 @@ if (remoteAddress) {
 }
 
 
-wss.on('connection', function connection(ws) {
-    ws.on('message', function incoming(message) {
-        let msg = JSON.parse(message);
+wss.on('connection', ws => {
+    ws.on('message', message => {
+        const msg = JSON.parse(message);
+        const { address } = msg;
 
         if (msg.type === 'auth') {
-            clients.forEach(client => {
-                if (client === msg.address) {
+            clients.forEach(target => {
+                if (target.address === address) {
                     return;
                 }
 
-                sendMessage(client, {
-                    type: 'new_client',
-                    address: msg.address
-                });
+                target.wsc.send(JSON.stringify({ type: 'new_client', address }));
             });
-            clients.push(msg.address);
-            console.log(`New client connected: ${msg.address}`);
-        }
 
-        if (msg.type === 'new_client') {
-            if (clients.indexOf(msg.address) !== -1) {
+            if (hasClient(address)) {
                 return;
             }
 
-            sendMessage(msg.address, {
-                type: 'auth',
-                address: ownAddress + ':' + port
-            });
-            clients.push(msg.address);
-            console.log(`Connect to ${msg.address}`);
+            console.log(`New client connected: ${address}`);
+            sendMessage(address, { type: 'auth', address: ownAddress + ':' + port });
+        }
+
+        if (msg.type === 'new_client') {
+            if (hasClient(address)) {
+                return;
+            }
+
+            console.log(`Connect to ${address}`);
+            sendMessage(address, { type: 'auth', address: ownAddress + ':' + port });
+        }
+
+        if (msg.type === 'message') {
+            console.log(msg.text);
         }
     });
 });
+
+setInterval(() =>  {
+    let closed = [];
+
+    clients.forEach(target => {
+        try {
+            target.wsc.send(JSON.stringify({
+                type: 'message',
+                text: `Sup! message from ${port}`
+            }));
+        } catch (e) {
+            console.log(`Get disconnected from ${target.address}`);
+            closed.push(target);
+        }
+    });
+
+    clients = clients.filter(target => closed.indexOf(target) === -1);
+    closed = [];
+}, 5000);
 
 
 server.listen(function () {
