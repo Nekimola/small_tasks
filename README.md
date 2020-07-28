@@ -1,1 +1,1 @@
-# Node.js test app
+# Node.js chat app.
